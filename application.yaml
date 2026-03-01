@@ -1,0 +1,60 @@
+database:
+  main:
+    engine: postgresql
+    host: "localhost"
+    port: 5432
+    username: "pgv3"
+    password: "CHANGE_ME_DEV_ONLY"
+    database: "pgv3"
+
+storage:
+  endpoint: "http://localhost:9000"
+  accessKey: "CHANGE_ME_DEV_ONLY"
+  secretKey: "CHANGE_ME_DEV_ONLY"
+  bucket: "pgv3-bucket"
+
+messaging:
+  host: "localhost"
+  port: 5672
+  username: "guest"
+  password: "guest"
+  vhost: "/"
+
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0
+
+security:
+  jwtSecretKey: "CHANGE_ME_DEV_ONLY"
+  jwtAlgorithm: "HS256"
+  accessTokenExpireMinutes: 60
+
+kubernetes:
+  namespace: "default"
+  inCluster: false
+  kubeconfigPath: "~/.kube/config"
+
+nodes:
+  - name: "node-1"
+    cpuMilli: 4000
+    memoryBytes: 17179869184  # 16GiB
+    gpu: 0
+    capacity: 100
+
+analysisTool:
+  defaultCpu: 500
+  defaultGpu: 0
+  defaultMemory: 2147483648  # 2GiB
+  defaultCapacity: 10
+  maxExpireDuration: "6M"
+
+logging:
+  level: "INFO"
+
+url:
+  graphio: "http://localhost:18080"
+  meta: "http://localhost:19080"
+  containerManagement: "http://localhost:20080/iris-data-importer"
+  templateAnalysisAdaptor: "http://localhost:21080/template-analysis-adaptor"
+
