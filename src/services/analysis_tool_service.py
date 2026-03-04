@@ -281,6 +281,38 @@ class AnalysisToolService:
             "exists": True,
         }
 
+    async def get_tool_detail_approval(self, tool_id: int, user: UserInfo) -> dict[str, Any]:
+        # pgv2 getDetailApproval:
+        # 기본 상세정보를 만들고, approval 값이 있으면 신청 리소스로 덮어써서 반환
+        tool = await self.db.get(AnalysisTool, tool_id)
+        if tool is None:
+            return {"id": tool_id, "exists": False}
+
+        approval = await self.db.get(AnalysisToolApproval, tool.approval_id) if tool.approval_id else None
+        image_list = await self._get_image_list()
+        data = self._to_tool_response(tool, user.id, image_list)
+
+        if approval is not None:
+            cpu = int(approval.cpu or 0)
+            gpu = int(approval.gpu or 0)
+            mem = int(approval.mem or 0)
+            capacity = int(approval.capacity or 0)
+            if cpu > 0:
+                data["cpu"] = cpu
+            if gpu > 0:
+                data["gpu"] = gpu
+            if mem > 0:
+                data["memory"] = mem
+            if capacity > 0:
+                data["capacity"] = capacity
+
+            expire_date = approval.expire_date.isoformat() if approval.expire_date else None
+            data["expireDate"] = expire_date
+            data["expireDay"] = (approval.expire_date - date.today()).days if approval.expire_date else 0
+            data["limit"] = approval.is_limit
+
+        return data
+
     def _parse_max_expire_date(self) -> str:
         value = (self.settings.analysisTool.maxExpireDuration or "6M").strip()
         if len(value) < 2:

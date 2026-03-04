@@ -152,31 +152,8 @@ async def get_analysis_tool_detail_approval(
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
-    tool = await db.get(AnalysisTool, id)
-    if tool is None or tool.approval_id is None:
-        return ApiResponse(result="1", data={"id": id, "approval": None})
-    approval = await db.get(AnalysisToolApproval, tool.approval_id)
-    return ApiResponse(
-        result="1",
-        data={
-            "id": id,
-            "approval": (
-                {
-                    "id": approval.id,
-                    "type": approval.type,
-                    "status": approval.status,
-                    "cpu": approval.cpu,
-                    "gpu": approval.gpu,
-                    "mem": approval.mem,
-                    "capacity": approval.capacity,
-                    "expireDate": str(approval.expire_date) if approval.expire_date else None,
-                    "limit": approval.is_limit,
-                }
-                if approval
-                else None
-            ),
-        },
-    )
+    data = await _analysis_service(db).get_tool_detail_approval(id, user)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool/exist-name")
