@@ -41,8 +41,8 @@ async def get_analysis_tool_create_meta(
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
-    data = await _container_client().get_create_info()
-    return ApiResponse(result="1", data=data.get("data", data))
+    data = await _analysis_service(db).get_create_info()
+    return ApiResponse(result="1", data=data)
 
 
 @router.get("/v1/analysis-tool/meta/resource")
@@ -112,7 +112,7 @@ async def get_analysis_tool_list(
         "status": status,
     }
     data = await _analysis_service(db).get_tool_list_with_count(user, params=params)
-    return ApiResponse(result="1", data=data.get("items", []))
+    return ApiResponse(result="1", data=data.get("list", []))
 
 
 @router.get("/v1/analysis-tool/list/waiting")
