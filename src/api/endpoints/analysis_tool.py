@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Path, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import get_settings
@@ -124,7 +124,7 @@ async def get_analysis_tool_waiting_list(
     stmt = (
         select(AnalysisTool)
         .join(AnalysisToolApproval, AnalysisTool.approval_id == AnalysisToolApproval.id, isouter=True)
-        .where(AnalysisToolApproval.status == "NONE")
+        .where(func.lower(AnalysisToolApproval.status) == "none")
         .order_by(AnalysisTool.id.desc())
     )
     rows = (await db.execute(stmt)).scalars().all()
@@ -137,7 +137,7 @@ async def get_analysis_tool_waiting_list(
 @router.get("/v1/analysis-tool/{id}/detail")
 @common_response
 async def get_analysis_tool_detail(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -148,7 +148,7 @@ async def get_analysis_tool_detail(
 @router.get("/v1/analysis-tool/{id}/detail/approval")
 @common_response
 async def get_analysis_tool_detail_approval(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -173,27 +173,31 @@ async def create_analysis_tool(
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
+) -> ApiResponse[Any]:
     data = await _analysis_service(db).create_tool(body, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "create failed"), data=None)
     return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool/{id}/reapplication")
 @common_response
 async def reapplication_analysis_tool(
-    id: int = Path(...),
+    id: str = Path(...),
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
-    data = await _analysis_service(db).get_tool_detail(id, user)
-    return ApiResponse(result="1", data={"id": id, "detail": data, "payload": body})
+) -> ApiResponse[Any]:
+    data = await _analysis_service(db).reapplication_tool(id, body, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "reapplication failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool/{id}/change-application-info")
 @common_response
 async def change_application_info(
-    id: int = Path(...),
+    id: str = Path(...),
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -204,7 +208,7 @@ async def change_application_info(
 @router.post("/v1/analysis-tool/{id}/update/expire-date")
 @common_response
 async def update_tool_expire_date(
-    id: int = Path(...),
+    id: str = Path(...),
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -215,7 +219,7 @@ async def update_tool_expire_date(
 @router.post("/v1/analysis-tool/{id}/update/remove")
 @common_response
 async def update_tool_remove(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -225,7 +229,7 @@ async def update_tool_remove(
 @router.post("/v1/analysis-tool/{id}/cancel")
 @common_response
 async def cancel_analysis_tool(
-    id: int = Path(...),
+    id: str = Path(...),
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -236,7 +240,7 @@ async def cancel_analysis_tool(
 @router.post("/v1/analysis-tool/{id}/stop")
 @common_response
 async def stop_analysis_tool(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -247,7 +251,7 @@ async def stop_analysis_tool(
 @router.post("/v1/analysis-tool/{id}/tool-restart")
 @common_response
 async def restart_analysis_tool(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -258,7 +262,7 @@ async def restart_analysis_tool(
 @router.post("/v1/analysis-tool/{id}/delete")
 @common_response
 async def delete_analysis_tool(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -279,7 +283,7 @@ async def get_management_status(
 @router.post("/v1/analysis-tool/management/{id}/approve/create")
 @common_response
 async def approve_create(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -289,7 +293,7 @@ async def approve_create(
 @router.post("/v1/analysis-tool/management/{id}/approve/resource")
 @common_response
 async def approve_resource(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -299,7 +303,7 @@ async def approve_resource(
 @router.post("/v1/analysis-tool/management/{id}/approve/expire-date")
 @common_response
 async def approve_expire_date(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -309,7 +313,7 @@ async def approve_expire_date(
 @router.get("/v1/analysis-tool-preview/{id}/tool-url")
 @common_response
 async def get_tool_url(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -320,7 +324,7 @@ async def get_tool_url(
 @router.post("/v1/analysis-tool-preview/{id}/update/access-date")
 @common_response
 async def update_access_date(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[bool]:
@@ -337,7 +341,7 @@ async def update_access_date(
 @router.post("/v1/analysis-tool-preview/{id}/file/list")
 @common_response
 async def get_file_list_in_tool(
-    id: int = Path(...),
+    id: str = Path(...),
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -351,7 +355,7 @@ async def get_file_list_in_tool(
 @router.post("/v1/analysis-tool-preview/{id}/file/import")
 @common_response
 async def import_file_to_tool(
-    id: int = Path(...),
+    id: str = Path(...),
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -362,7 +366,7 @@ async def import_file_to_tool(
 @router.post("/v1/analysis-tool-preview/{id}/file/export")
 @common_response
 async def export_file_from_tool(
-    id: int = Path(...),
+    id: str = Path(...),
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -388,7 +392,7 @@ async def get_backup_list(
 @router.get("/v1/analysis-tool/{id}/backup/status")
 @common_response
 async def get_backup_status(
-    id: int = Path(...),
+    id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
@@ -410,7 +414,7 @@ async def check_backup_exist_name(
 @router.post("/v1/analysis-tool/{id}/backup")
 @common_response
 async def backup_tool(
-    id: int = Path(...),
+    id: str = Path(...),
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

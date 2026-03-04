@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --help|-h)
-      echo "Usage: $0 [--tag TAG] [extra docker build args...]"
+      echo "Usage: $0 [--tag TAG] [extra sudo podman build args...]"
       echo "  기본: ${DEFAULT_TAG}"
       echo "  --tag mytag        -> ${IMAGE_BASE}:mytag"
       echo "  --tag repo/img:tag -> repo/img:tag"
@@ -49,7 +49,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "Building image: ${IMAGE_TAG}"
-docker buildx build --platform linux/amd64 -t "${IMAGE_TAG}" "${BUILD_ARGS[@]}" "${SCRIPT_DIR}"
+sudo podman buildx build --platform linux/amd64 -t "${IMAGE_TAG}" "${BUILD_ARGS[@]}" "${SCRIPT_DIR}"
 
 echo "Done. Built image: ${IMAGE_TAG}"
 

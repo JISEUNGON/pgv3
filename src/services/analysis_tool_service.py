@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload, selectinload
 
 from src.core.config import get_settings
 from src.models.entity.analysis_tool import AnalysisTool
@@ -23,8 +25,93 @@ class AnalysisToolService:
         target_name = (name or "").strip()
         if not target_name:
             return True
-        stmt = select(AnalysisTool.id).where(AnalysisTool.name == target_name).limit(1)
+        stmt = (
+            select(AnalysisTool.id)
+            .where(AnalysisTool.name == target_name)
+            .where(AnalysisTool.owner_id == user.id)
+            .limit(1)
+        )
         return (await self.db.execute(stmt)).scalar_one_or_none() is not None
+
+    @staticmethod
+    def _parse_expire_date(value: Any) -> date | None:
+        if value is None:
+            return None
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            v = value.strip()
+            if not v:
+                return None
+            return datetime.strptime(v[:10], "%Y-%m-%d").date()
+        return None
+
+    @staticmethod
+    def _to_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _get_image_type(image_id: str | None) -> str:
+        # pgv2와 동일하게 image tag에 gpu 포함 여부로 구분
+        if not image_id:
+            return "cpu"
+        parts = image_id.split(":")
+        tag = parts[-1] if len(parts) > 1 else ""
+        return "gpu" if "gpu" in tag.lower() else "cpu"
+
+    async def _get_used_resources(self, excluded_id: str | None = None) -> dict[str, int]:
+        active_statuses = ("process", "stopped", "error", "running")
+        stmt = select(
+            func.coalesce(func.sum(AnalysisTool.cpu), 0),
+            func.coalesce(func.sum(AnalysisTool.gpu), 0),
+            func.coalesce(func.sum(AnalysisTool.mem), 0),
+            func.coalesce(func.sum(AnalysisTool.capacity), 0),
+        ).where(func.lower(AnalysisTool.status).in_(active_statuses))
+        if excluded_id is not None:
+            stmt = stmt.where(AnalysisTool.id != excluded_id)
+        row = (await self.db.execute(stmt)).one()
+        return {
+            "cpu": int(row[0] or 0),
+            "gpu": int(row[1] or 0),
+            "mem": int(row[2] or 0),
+            "capacity": int(row[3] or 0),
+        }
+
+    async def _validate_resources(
+        self,
+        cpu: int,
+        gpu: int,
+        mem: int,
+        capacity: int,
+        excluded_id: str | None = None,
+    ) -> str | None:
+        resource_info = await self.container_client.get_resource_info()
+        data = resource_info.get("data", {})
+        total = data.get("total", {})
+        used = await self._get_used_resources(excluded_id=excluded_id)
+
+        requested = {
+            "cpu": cpu,
+            "gpu": gpu,
+            "mem": mem,
+            "capacity": capacity,
+        }
+        over_limit: list[str] = []
+        for key, value in requested.items():
+            if value <= 0:
+                continue
+            quota = self._to_int(total.get(key), 0)
+            if key == "cpu":
+                quota = quota // 1000
+            if used.get(key, 0) + value > quota:
+                over_limit.append(key.upper())
+
+        if over_limit:
+            return "현재 신청 가능한 리소스가 부족합니다.<br /> 부족한 리소스: " + ", ".join(over_limit)
+        return None
 
     @staticmethod
     def _to_iso_date(d: date) -> str:
@@ -152,35 +239,108 @@ class AnalysisToolService:
             )
         return result
 
-    async def create_tool(self, payload: dict[str, Any], user: UserInfo) -> dict[str, Any]:
+    async def create_tool(self, payload: dict[str, Any], user: UserInfo) -> str | dict[str, Any]:
         name = str(payload.get("name") or "").strip()
         if not name:
             return {"created": False, "error": "name is required"}
-        if await self.check_exist_name(name, user):
-            return {"created": False, "error": "name already exists"}
 
+        cpu = self._to_int(payload.get("cpu"), self.settings.analysisTool.defaultCpu)
+        gpu = self._to_int(payload.get("gpu"), self.settings.analysisTool.defaultGpu)
+        mem = self._to_int(payload.get("mem"), self.settings.analysisTool.defaultMemory)
+        capacity = self._to_int(payload.get("capacity"), self.settings.analysisTool.defaultCapacity)
+        image_id = payload.get("imageId")
+        if self._get_image_type(image_id) == "cpu":
+            gpu = 0
+
+        validation_error = await self._validate_resources(cpu, gpu, mem, capacity)
+        if validation_error:
+            return {"result": "0", "errorMessage": validation_error}
+
+        expire_date = self._parse_expire_date(payload.get("expireDate"))
+        is_limit = bool(payload.get("limit", False))
+
+        approval = AnalysisToolApproval(
+            type="application",
+            status="none",
+            cpu=cpu,
+            gpu=gpu,
+            mem=mem,
+            capacity=capacity,
+            expire_date=expire_date,
+            is_limit=is_limit,
+        )
+        self.db.add(approval)
+        await self.db.flush()
+
+        tool_id = str(uuid.uuid4())
         tool = AnalysisTool(
+            id=tool_id,
             name=name,
-            status="REQUEST",
+            status="application",
             description=str(payload.get("desc") or ""),
-            image_id=payload.get("imageId"),
+            image_id=image_id,
             backup_id=payload.get("backupId"),
-            cpu=int(payload.get("cpu") or self.settings.analysisTool.defaultCpu),
-            gpu=int(payload.get("gpu") or self.settings.analysisTool.defaultGpu),
-            mem=int(payload.get("mem") or self.settings.analysisTool.defaultMemory),
-            capacity=int(payload.get("capacity") or self.settings.analysisTool.defaultCapacity),
+            cpu=cpu,
+            gpu=gpu,
+            mem=mem,
+            capacity=capacity,
+            expire_date=expire_date,
+            is_limit=is_limit,
             owner_id=user.id,
-            access_date=datetime.utcnow(),
             create_date=datetime.utcnow(),
-            update_date=datetime.utcnow(),
+            approval_id=approval.id,
         )
         self.db.add(tool)
         await self.db.commit()
         await self.db.refresh(tool)
-        return {"created": True, "id": tool.id}
+        return tool.id
+
+    async def reapplication_tool(self, tool_id: str, payload: dict[str, Any], user: UserInfo) -> bool | dict[str, Any]:
+        tool = await self.db.get(AnalysisTool, tool_id)
+        if tool is None:
+            raise Exception("NO TOOL BY ID")
+
+        cpu = self._to_int(payload.get("cpu"), 0)
+        gpu = self._to_int(payload.get("gpu"), 0)
+        mem = self._to_int(payload.get("mem"), 0)
+        capacity = self._to_int(payload.get("capacity"), 0)
+        validation_error = await self._validate_resources(cpu, gpu, mem, capacity, excluded_id=tool_id)
+        if validation_error:
+            return {"result": "0", "errorMessage": validation_error}
+
+        approval = AnalysisToolApproval(
+            type="reapplication",
+            status="none",
+            cpu=cpu,
+            gpu=gpu,
+            mem=mem,
+            capacity=capacity,
+            expire_date=self._parse_expire_date(payload.get("expireDate")),
+            is_limit=bool(payload.get("limit", False)),
+        )
+        self.db.add(approval)
+        await self.db.flush()
+
+        name = payload.get("name")
+        if isinstance(name, str) and name != "":
+            tool.name = name
+        desc = payload.get("desc")
+        if desc is not None:
+            tool.description = str(desc)
+        tool.approval_id = approval.id
+        tool.update_date = datetime.utcnow()
+
+        await self.db.commit()
+        return True
 
     async def get_tool_list_with_count(self, user: UserInfo, params: dict[str, Any]) -> dict[str, Any]:
-        stmt = select(AnalysisTool)
+        stmt = (
+            select(AnalysisTool)
+            .options(
+                joinedload(AnalysisTool.user),
+                selectinload(AnalysisTool.approval),
+            )
+        )
         view_type = (params.get("type") or "").strip().lower()
         if view_type == "owner":
             stmt = stmt.where(AnalysisTool.owner_id == user.id)
@@ -225,7 +385,8 @@ class AnalysisToolService:
         stmt = stmt.order_by(sort_col.asc() if sort_order == "ASC" else sort_col.desc())
 
         # pgv2 getAnalysisToolListAndCount 는 offset/limit 미사용(주석 처리)
-        rows = (await self.db.execute(stmt)).scalars().all()
+        result = await self.db.execute(stmt)
+        rows = result.unique().scalars().all()
 
         filtered_stmt = select(func.count()).select_from(AnalysisTool)
         if view_type == "owner":
@@ -259,7 +420,7 @@ class AnalysisToolService:
             "filtered": filtered,
         }
 
-    async def get_tool_detail(self, tool_id: int, user: UserInfo) -> dict[str, Any]:
+    async def get_tool_detail(self, tool_id: str, user: UserInfo) -> dict[str, Any]:
         tool = await self.db.get(AnalysisTool, tool_id)
         if tool is None:
             return {"id": tool_id, "exists": False}
@@ -281,7 +442,7 @@ class AnalysisToolService:
             "exists": True,
         }
 
-    async def get_tool_detail_approval(self, tool_id: int, user: UserInfo) -> dict[str, Any]:
+    async def get_tool_detail_approval(self, tool_id: str, user: UserInfo) -> dict[str, Any]:
         # pgv2 getDetailApproval:
         # 기본 상세정보를 만들고, approval 값이 있으면 신청 리소스로 덮어써서 반환
         tool = await self.db.get(AnalysisTool, tool_id)
@@ -308,7 +469,9 @@ class AnalysisToolService:
 
             expire_date = approval.expire_date.isoformat() if approval.expire_date else None
             data["expireDate"] = expire_date
-            data["expireDay"] = (approval.expire_date - date.today()).days if approval.expire_date else 0
+            _exp = approval.expire_date
+            _exp_date = _exp.date() if isinstance(_exp, datetime) else _exp
+            data["expireDay"] = (_exp_date - date.today()).days if _exp_date else 0
             data["limit"] = approval.is_limit
 
         return data
@@ -374,7 +537,7 @@ class AnalysisToolService:
             "requestCount": request_count,
         }
 
-    async def stop_tool(self, tool_id: int, user: UserInfo) -> dict[str, Any]:
+    async def stop_tool(self, tool_id: str, user: UserInfo) -> dict[str, Any]:
         # pgv2 는 tool.containerId 로 stop 호출한다. 현재 스키마 제약으로 tool_id 를 컨테이너 ID로 사용.
         tool = await self.db.get(AnalysisTool, tool_id)
         container_id = str(tool.container_id) if tool and tool.container_id else str(tool_id)
@@ -388,7 +551,7 @@ class AnalysisToolService:
         except Exception:
             return {"id": tool_id, "stopped": False}
 
-    async def restart_tool(self, tool_id: int, user: UserInfo) -> dict[str, Any]:
+    async def restart_tool(self, tool_id: str, user: UserInfo) -> dict[str, Any]:
         tool = await self.db.get(AnalysisTool, tool_id)
         container_id = str(tool.container_id) if tool and tool.container_id else str(tool_id)
         try:
@@ -404,7 +567,7 @@ class AnalysisToolService:
         except Exception:
             return {"id": tool_id, "restarted": False}
 
-    async def delete_tool(self, tool_id: int, user: UserInfo) -> dict[str, Any]:
+    async def delete_tool(self, tool_id: str, user: UserInfo) -> dict[str, Any]:
         tool = await self.db.get(AnalysisTool, tool_id)
         if tool is None:
             return {"id": tool_id, "deleted": False}

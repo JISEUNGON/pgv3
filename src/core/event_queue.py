@@ -17,7 +17,7 @@ class EventType(str, Enum):
 
 class EventPayload(BaseModel):
     event_type: EventType
-    tool_id: int
+    tool_id: str
     user_id: str | None = None
     data: dict | None = None
 
