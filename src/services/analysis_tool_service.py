@@ -115,7 +115,11 @@ class AnalysisToolService:
             "memory": int(row.mem or 0),
             "capacity": int(row.capacity or 0),
             "expireDate": row.expire_date.isoformat() if row.expire_date else None,
-            "expireDay": (row.expire_date - date.today()).days if row.expire_date else 0,
+            "expireDay": (
+                (row.expire_date.date() if isinstance(row.expire_date, datetime) else row.expire_date) - date.today()
+            ).days
+            if row.expire_date
+            else 0,
             "owner": row.owner_id,
             "ownerName": row.user.userName if row.user else "UNKNOWN",
             "createDate": row.create_date.strftime("%Y-%m-%d %H:%M:%S") if row.create_date else None,
