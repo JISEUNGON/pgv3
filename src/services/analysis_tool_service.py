@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import get_settings
 from src.models.entity.analysis_tool import AnalysisTool
+from src.models.entity.analysis_tool_approval import AnalysisToolApproval
 from src.security.session_manager import UserInfo
 from src.tools.container_client import ContainerClient
 
@@ -299,52 +300,46 @@ class AnalysisToolService:
         return str(date.today() + timedelta(days=30 * amount))
 
     async def get_management_status(self, user: UserInfo) -> dict[str, Any]:
-        total = self.settings.cluster_resources.model_dump()
-        used = {
-            "total_cpu_milli": 0,
-            "total_memory_bytes": 0,
-            "total_gpu": 0,
-            "total_capacity": 0,
-        }
+        # pgv2 AnalysisToolService#getManagementStatus 포팅:
+        # - container-management /v1/resource-info 응답의 total/used/percent 형태 유지
+        # - cpu 는 milli -> core 로 변환해 반환
+        resource_info = await self.container_client.get_resource_info()
+        data = resource_info.get("data", {})
+        total = dict(data.get("total", {}))
+        used = dict(data.get("used", {}))
 
-        try:
-            available = await self.container_client.get_available_resource()
-            data = available.get("data", {})
-            used["total_cpu_milli"] = max(
-                total["total_cpu_milli"] - int(data.get("cpu", total["total_cpu_milli"])),
-                0,
-            )
-            used["total_memory_bytes"] = max(
-                total["total_memory_bytes"] - int(data.get("mem", total["total_memory_bytes"])),
-                0,
-            )
-            used["total_gpu"] = max(
-                total["total_gpu"] - int(data.get("gpu", total["total_gpu"])),
-                0,
-            )
-            used["total_capacity"] = max(
-                total["total_capacity"] - int(data.get("capacity", total["total_capacity"])),
-                0,
-            )
-        except Exception:
-            # 외부 CM API 가 없으면 설정값 기준으로만 반환
-            pass
+        total_cpu = int(total.get("cpu", 0) or 0)
+        total_gpu = int(total.get("gpu", 0) or 0)
+        total_mem = int(total.get("mem", 0) or 0)
+        total_capacity = int(total.get("capacity", 0) or 0)
 
-        def _rate(u: int, t: int) -> float:
-            if t <= 0:
-                return 0.0
-            return round((u / t) * 100, 2)
+        used_cpu = int(used.get("cpu", 0) or 0)
+        used_gpu = int(used.get("gpu", 0) or 0)
+        used_mem = int(used.get("mem", 0) or 0)
+        used_capacity = int(used.get("capacity", 0) or 0)
+
+        total["cpu"] = total_cpu // 1000
+        used["cpu"] = used_cpu // 1000
+
+        approval_count_stmt = (
+            select(func.count(AnalysisTool.id))
+            .select_from(AnalysisTool)
+            .join(AnalysisToolApproval, AnalysisTool.approval_id == AnalysisToolApproval.id, isouter=True)
+            .where(func.lower(func.coalesce(AnalysisToolApproval.status, "")) == "none")
+        )
+        request_count = int((await self.db.execute(approval_count_stmt)).scalar_one() or 0)
 
         return {
             "total": total,
             "used": used,
-            "usageRate": {
-                "cpu": _rate(used["total_cpu_milli"], total["total_cpu_milli"]),
-                "memory": _rate(used["total_memory_bytes"], total["total_memory_bytes"]),
-                "gpu": _rate(used["total_gpu"], total["total_gpu"]),
-                "capacity": _rate(used["total_capacity"], total["total_capacity"]),
+            "percent": {
+                "cpu": -1 if total_cpu == 0 else (used_cpu * 100.0) / total_cpu,
+                "gpu": -1 if total_gpu == 0 else (used_gpu * 100.0) / total_gpu,
+                "mem": -1 if total_mem == 0 else (used_mem * 100.0) / total_mem,
+                "capacity": -1 if total_capacity == 0 else (used_capacity * 100.0) / total_capacity,
             },
-            "maxExpireDate": self._parse_max_expire_date(),
+            "lastRequestDate": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "requestCount": request_count,
         }
 
     async def stop_tool(self, tool_id: int, user: UserInfo) -> dict[str, Any]:
