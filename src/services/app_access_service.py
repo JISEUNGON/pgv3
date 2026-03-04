@@ -111,15 +111,15 @@ class AppAccessService:
             return stmt.order_by(col.asc())
         return stmt.order_by(col.desc())
 
+    @staticmethod
+    def _base_stmt() -> Select:
+        return select(AppAccessLog, WasUser).outerjoin(WasUser, AppAccessLog.user_id == WasUser.userId)
+
     async def get_list_and_count(self, search: AppAccessSearchRequest) -> dict[str, Any]:
         offset = max(search.offset, 0)
         size = search.size if search.size > 0 else 20
 
-        base_stmt = (
-            select(AppAccessLog, WasUser)
-            .outerjoin(WasUser, AppAccessLog.user_id == WasUser.userId)
-            .options(joinedload(AppAccessLog.user))
-        )
+        base_stmt = self._base_stmt().options(joinedload(AppAccessLog.user))
         filtered_stmt = self._apply_search_filters(base_stmt, search)
         sorted_stmt = self._apply_sorting(filtered_stmt, search.sort)
         paged_stmt = sorted_stmt.offset(offset * size).limit(size)
@@ -138,13 +138,17 @@ class AppAccessService:
                 }
             )
 
-        count_stmt = select(func.count()).select_from(AppAccessLog)
-        count_stmt = self._apply_search_filters(count_stmt, search)
-        total = (await self.db.execute(count_stmt)).scalar_one()
+        filtered_count_stmt = select(func.count()).select_from(AppAccessLog).outerjoin(
+            WasUser, AppAccessLog.user_id == WasUser.userId
+        )
+        filtered_count_stmt = self._apply_search_filters(filtered_count_stmt, search)
+        filtered = int((await self.db.execute(filtered_count_stmt)).scalar_one())
 
-        return {"items": items, "total": total}
+        total_stmt = select(func.count()).select_from(AppAccessLog)
+        total = int((await self.db.execute(total_stmt)).scalar_one())
+
+        return {"items": items, "total": total, "filtered": filtered}
 
     async def get_list(self, search: AppAccessSearchRequest) -> list[dict[str, Any]]:
         result = await self.get_list_and_count(search)
         return result["items"]
-

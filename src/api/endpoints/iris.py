@@ -1,41 +1,32 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.session import get_db
 from src.dto.response.api_response import ApiResponse
 from src.middleware.auth import get_current_user
 from src.security.session_manager import UserInfo
+from src.services.iris_service import IrisService
 from src.utils.common_response import common_response
 
-router = APIRouter()
+router = APIRouter(tags=["IRIS"])
 
 
 @router.get("/api/status")
-@common_response
-async def iris_status() -> ApiResponse[dict]:
-    return ApiResponse(result="1", data={"status": True})
+async def iris_status() -> dict[str, bool]:
+    return {"status": True}
 
 
 @router.get("/api/route")
-@common_response
-async def iris_route() -> ApiResponse[dict]:
-    # TODO: route_{locale}.yml 로딩 로직 포팅
-    return ApiResponse(result="1", data={"routes": []})
+async def iris_route(
+    locale: str = Query(default="ko"),
+    db: AsyncSession = Depends(get_db),
+):
+    service = IrisService(db)
+    return await service.get_route(locale)
 
 
 @router.post("/api/event")
-@common_response
-async def iris_event(
-    user: UserInfo = Depends(get_current_user),
-) -> ApiResponse[str]:
-    return ApiResponse(result="1", data="success")
-
-
-@router.get("/api/heartbeat")
-@common_response
-async def iris_heartbeat(
-    user: UserInfo = Depends(get_current_user),
-) -> ApiResponse[dict]:
-    # TODO: Brick 토큰 검증/갱신 로직 포팅
-    return ApiResponse(result="1", data={"alive": True})
-
+async def iris_event() -> str:
+    return "success"

@@ -14,26 +14,48 @@ class BackupService:
         self.container_client = container_client
 
     async def get_backup_list(self, user: UserInfo, params: dict[str, Any]) -> list[dict[str, Any]]:
-        # TODO: 권한 정책에 따른 백업 목록 조회 구현
-        return []
+        data = await self.container_client.get_backup_list(
+            is_share=params.get("isShare"),
+            image_id=params.get("imageId"),
+            user_id=params.get("userId"),
+            query=params.get("query"),
+        )
+        return list(data.get("data") or data.get("list") or [])
 
     async def get_backup_status(self, tool_id: int, user: UserInfo) -> dict[str, Any]:
-        # TODO: 컨테이너 기준 백업 상태 조회
-        return {"id": tool_id}
+        data = await self.container_client.get_backup_status(str(tool_id))
+        return {"id": tool_id, "status": data.get("data", data)}
 
-    async def check_backup_exist_name(self, name: str, user: UserInfo) -> bool:
-        # TODO: 백업명 중복 체크
-        return False
+    async def check_backup_exist_name(self, payload: dict[str, Any], user: UserInfo) -> bool:
+        data = await self.container_client.exist_backup_name(
+            backup_id=payload.get("id"),
+            image_id=str(payload.get("imageId") or ""),
+            user_id=user.id,
+            backup_title=str(payload.get("name") or ""),
+        )
+        return bool(data.get("data", {}).get("isExist") or data.get("isExist", False))
 
-    async def backup_tool(self, tool_id: int, user: UserInfo) -> dict[str, Any]:
-        # TODO: 컨테이너 백업 생성 및 메타 저장
-        return {"id": tool_id}
+    async def backup_tool(self, tool_id: int, user: UserInfo, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        body = payload or {}
+        data = await self.container_client.create_backup(
+            container_id=str(tool_id),
+            user_id=user.id,
+            tool_owner_id=str(body.get("ownerId") or user.id),
+            backup_title=str(body.get("name") or ""),
+            is_share=bool(body.get("shareYn", False)),
+            description=str(body.get("description") or ""),
+        )
+        return {"id": tool_id, "backup": data.get("data", data)}
 
     async def update_backup(self, backup_id: int, user: UserInfo, payload: dict[str, Any]) -> dict[str, Any]:
-        # TODO: 수정 권한 체크 및 변경
-        return {"backupId": backup_id}
+        data = await self.container_client.update_backup(
+            backup_id=str(backup_id),
+            backup_title=str(payload.get("name") or ""),
+            description=str(payload.get("description") or ""),
+            is_share=bool(payload.get("shareYn", False)),
+        )
+        return {"backupId": backup_id, "updated": bool(data)}
 
     async def delete_backup(self, backup_id: int, user: UserInfo) -> dict[str, Any]:
-        # TODO: 권한 체크 후 백업 삭제
-        return {"backupId": backup_id}
-
+        data = await self.container_client.delete_backup(str(backup_id))
+        return {"backupId": backup_id, "deleted": bool(data)}

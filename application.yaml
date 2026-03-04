@@ -1,11 +1,11 @@
 database:
   main:
-    engine: postgresql
-    host: "localhost"
-    port: 5432
-    username: "pgv3"
-    password: "CHANGE_ME_DEV_ONLY"
-    database: "pgv3"
+    engine: mariadb
+    host: "192.168.100.237"
+    port: 31337
+    username: "root"
+    password: "biris.manse"
+    database: "play_ground"
 
 storage:
   endpoint: "http://localhost:9000"
@@ -25,11 +25,6 @@ redis:
   port: 6379
   db: 0
 
-security:
-  jwtSecretKey: "CHANGE_ME_DEV_ONLY"
-  jwtAlgorithm: "HS256"
-  accessTokenExpireMinutes: 60
-
 kubernetes:
   namespace: "default"
   inCluster: false
@@ -41,20 +36,85 @@ nodes:
     memoryBytes: 17179869184  # 16GiB
     gpu: 0
     capacity: 100
-
-analysisTool:
-  defaultCpu: 500
-  defaultGpu: 0
-  defaultMemory: 2147483648  # 2GiB
-  defaultCapacity: 10
-  maxExpireDuration: "6M"
-
+security:
+  # from pgv2 properties.iris.token.secret
+  jwtSecretKey: "jwt-secrect-b-iris"
+  jwtAlgorithm: "HS256"
+  # from pgv2 properties.iris.token.max-age(3600 sec) -> 60 min
+  accessTokenExpireMinutes: 60
 logging:
+  # from pgv2 logging.level.root=info
   level: "INFO"
 
 url:
-  graphio: "http://localhost:18080"
-  meta: "http://localhost:19080"
-  containerManagement: "http://localhost:20080/iris-data-importer"
-  templateAnalysisAdaptor: "http://localhost:21080/template-analysis-adaptor"
+  graphio: "https://djs.mobigen.com/graphio/governance"
+  # from pgv2 properties.iris.server.meta
+  meta: "https://djs.mobigen.com/meta"
+  containerManagement: "https://djs.mobigen.com/container-management"
 
+# pgv2-origin/project/common/src/main/resources/application.yml
+# 에서 pgv3 스키마에 직접 매핑되지 않는 항목 보존
+compat:
+  spring:
+    web:
+      locale: "ko"
+    servlet:
+      multipart:
+        maxFileSize: "1024MB"
+        maxRequestSize: "1024MB"
+  server:
+    port: 80
+    sessionTimeoutSeconds: 7200
+    contextPath: "/pgv2"
+    compressionEnabled: true
+    uriEncoding: "UTF-8"
+  i18n:
+    basenames:
+      - "i18n/messages"
+      - "i18n/exception"
+      - "i18n/validation"
+  httpClientConfiguration:
+    maxTotal: 300
+    defaultMaxPerRoute: 50
+    defaultKeepAliveDuration: -1
+    connectionRequestTimeout: 3000
+    connectionTimeout: 3000
+    socketTimeout: -1
+    idleTimeout: 60
+  iris:
+    security:
+      redirectUrl: "/"
+      iframeOption: "disable"
+      csrf: true
+      sameSite: "Lax"
+      cors:
+        pattern: "/**"
+        allowedOrigins: "http://localhost:3000"
+        allowedMethods: "*"
+        allowedHeaders: "*"
+        allowCredentials: true
+    token:
+      name: "x-access-token"
+      graphioName: "access_token"
+    server:
+      brick: "https://djs.mobigen.com"
+      graphio: "https://djs.mobigen.com/graphio/governance"
+    route:
+      locales: ["ko", "en", "zh", "ja"]
+    auth:
+      rsaEnabled: true
+
+# UI에서 쓰이는 설정들
+common:
+  pollingInterval: 5000
+option:
+  backupEnabled: true
+  gpuEnabled: false
+  storageEnabled: false
+  mode: iris
+analysisTool:
+  defaultCpu: 1000
+  defaultGpu: 1
+  defaultMemory: 4294967296  # 4GiB
+  defaultCapacity: 10
+  maxExpireDuration: "6M"

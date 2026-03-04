@@ -1,0 +1,9 @@
+serviceId: "pgv2"
+resource: "Playground-v2"
+routes:
+  - name: "overview"
+    resource: "Overview"
+    url: "/pgv2/overview"
+  - name: "analysis-tool"
+    resource: "Analysis Project"
+    url: "/pgv2/analysis-tool"

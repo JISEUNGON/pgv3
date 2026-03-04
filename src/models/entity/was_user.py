@@ -13,8 +13,8 @@ class WasUser(Base):
     """
 
     __tablename__ = "was_user"
+    __table_args__ = {"schema": "was"}  # ← 이게 정식 필드
 
     userId: Mapped[str] = mapped_column("id", String(255), primary_key=True)
     userName: Mapped[str | None] = mapped_column("name", String(255), nullable=True)
     roleCode: Mapped[str | None] = mapped_column("role_code", String(255), nullable=True)
-

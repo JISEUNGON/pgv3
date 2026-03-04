@@ -79,6 +79,22 @@ class AnalysisToolSettings(BaseModel):
     maxExpireDuration: str
 
 
+class CommonSettings(BaseModel):
+    pollingInterval: int = 5000
+
+
+class FileNodeSettings(BaseModel):
+    allowUploadTypes: List[str] = Field(default_factory=list)
+    allowPreviewTypes: List[str] = Field(default_factory=list)
+
+
+class OptionSettings(BaseModel):
+    mode: str | None = None
+    backupEnabled: bool | None = None
+    gpuEnabled: bool | None = None
+    storageEnabled: bool | None = None
+
+
 class LoggingSettings(BaseModel):
     level: str = "INFO"
 
@@ -108,8 +124,12 @@ class AppSettings(BaseSettings):
     kubernetes: KubernetesSettings
     nodes: List[NodeSettings] = Field(default_factory=list)
     analysisTool: AnalysisToolSettings
+    common: CommonSettings = CommonSettings()
+    fileNode: FileNodeSettings = FileNodeSettings()
+    option: OptionSettings = OptionSettings()
     logging: LoggingSettings = LoggingSettings()
     url: UrlSettings | None = None
+    compat: Dict[str, Any] = Field(default_factory=dict)
 
     cluster_resources: ClusterResources = Field(default_factory=ClusterResources)
 
@@ -172,4 +192,3 @@ def get_settings() -> AppSettings:
     settings = AppSettings()
     settings.calc_cluster_resources()
     return settings
-

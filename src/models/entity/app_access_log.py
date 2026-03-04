@@ -28,7 +28,7 @@ class AppAccessLog(Base):
     app_code: Mapped[str] = mapped_column("anls_app_cd", String(255), nullable=False)
     sub_id: Mapped[Optional[str]] = mapped_column("sub_id", String(255), nullable=True)
     user_id: Mapped[Optional[str]] = mapped_column(
-        "user_id", String(255), ForeignKey("was_user.id"), nullable=True
+        "user_id", String(255), ForeignKey("was.was_user.id"), nullable=True
     )
     access_date: Mapped[datetime] = mapped_column("acs_dt", DateTime, nullable=False)
 
