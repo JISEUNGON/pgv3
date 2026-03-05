@@ -118,3 +118,6 @@ analysisTool:
   defaultMemory: 4294967296  # 4GiB
   defaultCapacity: 10
   maxExpireDuration: "6M"
+test:
+  user: "root"
+  password: "biris.manse"

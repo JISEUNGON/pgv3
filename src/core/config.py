@@ -113,6 +113,11 @@ class UrlSettings(BaseModel):
     templateAnalysisAdaptor: str | None = None
 
 
+class TestSettings(BaseModel):
+    user: str | None = None
+    password: str | None = None
+
+
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(env_nested_delimiter="__", extra="ignore")
 
@@ -130,6 +135,7 @@ class AppSettings(BaseSettings):
     logging: LoggingSettings = LoggingSettings()
     url: UrlSettings | None = None
     compat: Dict[str, Any] = Field(default_factory=dict)
+    test: TestSettings | None = None
 
     cluster_resources: ClusterResources = Field(default_factory=ClusterResources)
 
