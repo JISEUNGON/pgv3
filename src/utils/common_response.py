@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import inspect
 from functools import wraps
-from typing import Any, Callable, Coroutine, TypeVar
+from typing import Any, Callable, Coroutine, TypeVar, get_type_hints
 
 from fastapi import Response, status
 from fastapi.responses import JSONResponse
@@ -45,6 +46,19 @@ def to_api_response(api_response: ApiResponse[Any], status_code: int = status.HT
 
 
 def common_response(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., Coroutine[Any, Any, Response]]:
+    # Preserve the original endpoint signature with resolved annotations so
+    # FastAPI can correctly detect special params like Request/Response.
+    original_sig = inspect.signature(func)
+    type_hints = get_type_hints(func, globalns=func.__globals__, localns=None, include_extras=True)
+    resolved_params = []
+    for p in original_sig.parameters.values():
+        if p.name in type_hints:
+            resolved_params.append(p.replace(annotation=type_hints[p.name]))
+        else:
+            resolved_params.append(p)
+    resolved_return = type_hints.get("return", original_sig.return_annotation)
+    resolved_sig = original_sig.replace(parameters=resolved_params, return_annotation=resolved_return)
+
     @wraps(func)
     async def wrapper(*args: Any, **kwargs: Any) -> Response:
         result = await func(*args, **kwargs)
@@ -54,4 +68,5 @@ def common_response(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[.
             api_resp = success(result)
         return to_api_response(api_resp)
 
+    wrapper.__signature__ = resolved_sig
     return wrapper

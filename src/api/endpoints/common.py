@@ -24,12 +24,6 @@ async def get_common_session_user(
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
-    # 헤더 내용 출력
-    headers = dict(request.headers)
-    logger.info("v1/common/session/user request headers: %s", headers)
-    for name, value in request.headers.items():
-        logger.debug("Header: %s = %s", name, value)
-
     service = CommonService(db)
     return ApiResponse(result="1", data=await service.get_session_user(user))
 
