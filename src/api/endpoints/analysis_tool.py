@@ -201,8 +201,11 @@ async def change_application_info(
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
-    return ApiResponse(result="1", data={"id": id, "changed": True, "payload": body})
+) -> ApiResponse[Any]:
+    data = await _analysis_service(db).change_application_info(id, body, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "change-application-info failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool/{id}/update/expire-date")
@@ -212,8 +215,11 @@ async def update_tool_expire_date(
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
-    return ApiResponse(result="1", data={"id": id, "updated": True, "payload": body})
+) -> ApiResponse[Any]:
+    data = await _analysis_service(db).update_tool_expire_date(id, body, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "update-expire-date failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool/{id}/update/remove")
@@ -222,8 +228,11 @@ async def update_tool_remove(
     id: str = Path(...),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
-    return ApiResponse(result="1", data={"id": id, "removed": True})
+) -> ApiResponse[Any]:
+    data = await _analysis_service(db).update_tool_remove(id, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "remove failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool/{id}/cancel")
@@ -233,8 +242,11 @@ async def cancel_analysis_tool(
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
-    return ApiResponse(result="1", data={"id": id, "cancelled": True, "payload": body})
+) -> ApiResponse[Any]:
+    data = await _analysis_service(db).cancel_application(id, body, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "cancel failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool/{id}/stop")
@@ -245,6 +257,8 @@ async def stop_analysis_tool(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
     data = await _analysis_service(db).stop_tool(id, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "stop failed"), data=None)
     return ApiResponse(result="1", data=data)
 
 
@@ -256,6 +270,8 @@ async def restart_analysis_tool(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
     data = await _analysis_service(db).restart_tool(id, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "restart failed"), data=None)
     return ApiResponse(result="1", data=data)
 
 
@@ -284,30 +300,48 @@ async def get_management_status(
 @common_response
 async def approve_create(
     id: str = Path(...),
+    body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
-    return ApiResponse(result="1", data={"id": id, "approved": True, "type": "create"})
+) -> ApiResponse[Any]:
+    if not user.is_admin:
+        return ApiResponse(result="0", errorMessage="session is not admin.", data=None)
+    data = await _analysis_service(db).approve_create(id, bool(body.get("approve")), user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "approve-create failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool/management/{id}/approve/resource")
 @common_response
 async def approve_resource(
     id: str = Path(...),
+    body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
-    return ApiResponse(result="1", data={"id": id, "approved": True, "type": "resource"})
+) -> ApiResponse[Any]:
+    if not user.is_admin:
+        return ApiResponse(result="0", errorMessage="session is not admin.", data=None)
+    data = await _analysis_service(db).approve_resource(id, bool(body.get("approve")), user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "approve-resource failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool/management/{id}/approve/expire-date")
 @common_response
 async def approve_expire_date(
     id: str = Path(...),
+    body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
-    return ApiResponse(result="1", data={"id": id, "approved": True, "type": "expire-date"})
+) -> ApiResponse[Any]:
+    if not user.is_admin:
+        return ApiResponse(result="0", errorMessage="session is not admin.", data=None)
+    data = await _analysis_service(db).approve_expire_date(id, bool(body.get("approve")), user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "approve-expire-date failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.get("/v1/analysis-tool-preview/{id}/tool-url")
@@ -317,8 +351,8 @@ async def get_tool_url(
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
-    tool = await db.get(AnalysisTool, id)
-    return ApiResponse(result="1", data={"url": tool.container_id if tool else ""})
+    url = await _analysis_service(db).get_tool_url(id, user)
+    return ApiResponse(result="1", data={"url": url})
 
 
 @router.post("/v1/analysis-tool-preview/{id}/update/access-date")
@@ -328,14 +362,8 @@ async def update_access_date(
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[bool]:
-    tool = await db.get(AnalysisTool, id)
-    if tool is None:
-        return ApiResponse(result="1", data=False)
-    from datetime import datetime
-
-    tool.access_date = datetime.utcnow()
-    await db.commit()
-    return ApiResponse(result="1", data=True)
+    data = await _analysis_service(db).update_access_date(id, user)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool-preview/{id}/file/list")
@@ -345,11 +373,11 @@ async def get_file_list_in_tool(
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[list]:
-    files = body.get("files")
-    if not isinstance(files, list):
-        files = []
-    return ApiResponse(result="1", data=files)
+) -> ApiResponse[Any]:
+    data = await _analysis_service(db).get_file_list_in_tool(id, body, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "file-list failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool-preview/{id}/file/import")
@@ -359,8 +387,11 @@ async def import_file_to_tool(
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
-    return ApiResponse(result="1", data={"imported": True, "id": id, "payload": body})
+) -> ApiResponse[Any]:
+    data = await _analysis_service(db).import_file_to_tool(id, body, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "file-import failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.post("/v1/analysis-tool-preview/{id}/file/export")
@@ -370,8 +401,11 @@ async def export_file_from_tool(
     body: dict[str, Any] = Body(default_factory=dict),
     user: UserInfo = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[dict]:
-    return ApiResponse(result="1", data={"exported": True, "id": id, "payload": body})
+) -> ApiResponse[Any]:
+    data = await _analysis_service(db).export_file_from_tool(id, body, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "file-export failed"), data=None)
+    return ApiResponse(result="1", data=data)
 
 
 @router.get("/v1/analysis-tool/backup/list")
@@ -397,6 +431,8 @@ async def get_backup_status(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
     data = await _backup_service(db).get_backup_status(id, user)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "backup-status failed"), data=None)
     return ApiResponse(result="1", data=data)
 
 
@@ -420,6 +456,8 @@ async def backup_tool(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
     data = await _backup_service(db).backup_tool(id, user, payload=body)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "backup failed"), data=None)
     return ApiResponse(result="1", data=data)
 
 
@@ -443,4 +481,16 @@ async def delete_backup(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
     data = await _backup_service(db).delete_backup(backupId, user)
+    return ApiResponse(result="1", data=data)
+
+
+@router.post("/v1/analysis-tool/api/update/status")
+@common_response
+async def update_tool_status_api(
+    body: dict[str, Any] = Body(default_factory=dict),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[Any]:
+    data = await _analysis_service(db).update_tool_status(body)
+    if isinstance(data, dict) and str(data.get("result")) == "0":
+        return ApiResponse(result="0", errorMessage=str(data.get("errorMessage") or "update status failed"), data=None)
     return ApiResponse(result="1", data=data)

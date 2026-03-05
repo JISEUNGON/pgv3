@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.entity.analysis_tool import AnalysisTool
 from src.security.session_manager import UserInfo
 from src.tools.container_client import ContainerClient
 
@@ -23,7 +24,11 @@ class BackupService:
         return list(data.get("data") or data.get("list") or [])
 
     async def get_backup_status(self, tool_id: str, user: UserInfo) -> dict[str, Any]:
-        data = await self.container_client.get_backup_status(tool_id)
+        tool = await self.db.get(AnalysisTool, tool_id)
+        container_id = str(tool.container_id or "") if tool else ""
+        if not container_id:
+            return {"result": "0", "errorMessage": "empty container id"}
+        data = await self.container_client.get_backup_status(container_id)
         return {"id": tool_id, "status": data.get("data", data)}
 
     async def check_backup_exist_name(self, payload: dict[str, Any], user: UserInfo) -> bool:
@@ -37,10 +42,14 @@ class BackupService:
 
     async def backup_tool(self, tool_id: str, user: UserInfo, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         body = payload or {}
+        tool = await self.db.get(AnalysisTool, tool_id)
+        container_id = str(tool.container_id or "") if tool else ""
+        if not container_id:
+            return {"result": "0", "errorMessage": "empty container id"}
         data = await self.container_client.create_backup(
-            container_id=tool_id,
+            container_id=container_id,
             user_id=user.id,
-            tool_owner_id=str(body.get("ownerId") or user.id),
+            tool_owner_id=str(tool.owner_id or body.get("ownerId") or user.id),
             backup_title=str(body.get("name") or ""),
             is_share=bool(body.get("shareYn", False)),
             description=str(body.get("description") or ""),

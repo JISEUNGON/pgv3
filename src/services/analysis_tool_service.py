@@ -11,6 +11,7 @@ from sqlalchemy.orm import joinedload, selectinload
 from src.core.config import get_settings
 from src.models.entity.analysis_tool import AnalysisTool
 from src.models.entity.analysis_tool_approval import AnalysisToolApproval
+from src.models.entity.file_node import FileNode
 from src.security.session_manager import UserInfo
 from src.tools.container_client import ContainerClient
 
@@ -112,6 +113,55 @@ class AnalysisToolService:
         if over_limit:
             return "현재 신청 가능한 리소스가 부족합니다.<br /> 부족한 리소스: " + ", ".join(over_limit)
         return None
+
+    @staticmethod
+    def _is_approval_none(status: str | None) -> bool:
+        return (status or "").strip().lower() == "none"
+
+    @staticmethod
+    def _is_tool_application(status: str | None) -> bool:
+        return (status or "").strip().lower() == "application"
+
+    @staticmethod
+    def _is_truthy(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "y", "yes"}
+        return bool(value)
+
+    @staticmethod
+    def _extract_files_from_tree(items: Any) -> list[dict[str, Any]]:
+        flat: list[dict[str, Any]] = []
+
+        def _walk(node: Any) -> None:
+            if isinstance(node, dict):
+                children = node.get("children")
+                if isinstance(children, list):
+                    for child in children:
+                        _walk(child)
+                if not children and not AnalysisToolService._is_truthy(node.get("isDir")):
+                    flat.append(node)
+                return
+            if isinstance(node, list):
+                for entry in node:
+                    _walk(entry)
+
+        _walk(items)
+        return flat
+
+    async def _get_tool_by_id(self, tool_id: str) -> AnalysisTool:
+        tool = await self.db.get(AnalysisTool, tool_id)
+        if tool is None:
+            raise Exception("NO TOOL BY ID")
+        return tool
+
+    async def _get_tool_and_container_id(self, tool_id: str) -> tuple[AnalysisTool, str]:
+        tool = await self._get_tool_by_id(tool_id)
+        container_id = str(tool.container_id or "").strip()
+        if not container_id:
+            raise ValueError("empty container id")
+        return tool, container_id
 
     @staticmethod
     def _to_iso_date(d: date) -> str:
@@ -260,8 +310,8 @@ class AnalysisToolService:
         is_limit = bool(payload.get("limit", False))
 
         approval = AnalysisToolApproval(
-            type="application",
-            status="none",
+            type="APPLICATION",
+            status="NONE",
             cpu=cpu,
             gpu=gpu,
             mem=mem,
@@ -276,7 +326,7 @@ class AnalysisToolService:
         tool = AnalysisTool(
             id=tool_id,
             name=name,
-            status="application",
+            status="APPLICATION",
             description=str(payload.get("desc") or ""),
             image_id=image_id,
             backup_id=payload.get("backupId"),
@@ -296,9 +346,7 @@ class AnalysisToolService:
         return tool.id
 
     async def reapplication_tool(self, tool_id: str, payload: dict[str, Any], user: UserInfo) -> bool | dict[str, Any]:
-        tool = await self.db.get(AnalysisTool, tool_id)
-        if tool is None:
-            raise Exception("NO TOOL BY ID")
+        tool = await self._get_tool_by_id(tool_id)
 
         cpu = self._to_int(payload.get("cpu"), 0)
         gpu = self._to_int(payload.get("gpu"), 0)
@@ -309,8 +357,8 @@ class AnalysisToolService:
             return {"result": "0", "errorMessage": validation_error}
 
         approval = AnalysisToolApproval(
-            type="reapplication",
-            status="none",
+            type="REAPPLICATION",
+            status="NONE",
             cpu=cpu,
             gpu=gpu,
             mem=mem,
@@ -330,6 +378,267 @@ class AnalysisToolService:
         tool.approval_id = approval.id
         tool.update_date = datetime.utcnow()
 
+        await self.db.commit()
+        return True
+
+    async def change_application_info(self, tool_id: str, payload: dict[str, Any], user: UserInfo) -> bool | dict[str, Any]:
+        tool = await self._get_tool_by_id(tool_id)
+        approval = await self.db.get(AnalysisToolApproval, tool.approval_id) if tool.approval_id else None
+        if approval is None:
+            return {"result": "0", "errorMessage": f"approval was not found in {tool_id}"}
+
+        cpu = self._to_int(payload.get("cpu"), int(approval.cpu or 0))
+        gpu = self._to_int(payload.get("gpu"), int(approval.gpu or 0))
+        mem = self._to_int(payload.get("mem"), int(approval.mem or 0))
+        capacity = self._to_int(payload.get("capacity"), int(approval.capacity or 0))
+
+        image_id = payload.get("imageId", tool.image_id)
+        if self._get_image_type(image_id) == "cpu":
+            gpu = 0
+
+        validation_error = await self._validate_resources(cpu, gpu, mem, capacity)
+        if validation_error:
+            return {"result": "0", "errorMessage": validation_error}
+
+        approval_type = (approval.type or "").strip().upper()
+        if approval_type in {"APPLICATION", "REAPPLICATION"}:
+            approval.cpu = cpu
+            approval.gpu = gpu
+            approval.mem = mem
+            approval.capacity = capacity
+            approval.expire_date = self._parse_expire_date(payload.get("expireDate")) or approval.expire_date
+            approval.is_limit = bool(payload.get("limit", approval.is_limit))
+        elif approval_type == "EXPIRE":
+            approval.expire_date = self._parse_expire_date(payload.get("expireDate")) or approval.expire_date
+            approval.is_limit = bool(payload.get("limit", approval.is_limit))
+
+        name = payload.get("name")
+        if isinstance(name, str) and name.strip():
+            tool.name = name.strip()
+        desc = payload.get("desc")
+        if desc is not None:
+            tool.description = str(desc)
+
+        if approval_type == "APPLICATION":
+            tool.image_id = image_id
+            tool.cpu = cpu
+            tool.gpu = gpu
+            tool.mem = mem
+            tool.capacity = capacity
+            tool.expire_date = self._parse_expire_date(payload.get("expireDate")) or tool.expire_date
+            tool.is_limit = bool(payload.get("limit", tool.is_limit))
+
+        tool.approval_id = approval.id
+        tool.update_date = datetime.utcnow()
+        await self.db.commit()
+        return True
+
+    async def update_tool_expire_date(self, tool_id: str, payload: dict[str, Any], user: UserInfo) -> bool:
+        tool = await self._get_tool_by_id(tool_id)
+        approval = AnalysisToolApproval(
+            type="EXPIRE",
+            status="NONE",
+            expire_date=self._parse_expire_date(payload.get("expireDate")),
+            is_limit=bool(payload.get("limit", False)),
+        )
+        self.db.add(approval)
+        await self.db.flush()
+
+        name = payload.get("name")
+        if isinstance(name, str) and name.strip():
+            tool.name = name.strip()
+        desc = payload.get("desc")
+        if desc is not None:
+            tool.description = str(desc)
+
+        tool.approval_id = approval.id
+        tool.update_date = datetime.utcnow()
+        await self.db.commit()
+        return True
+
+    async def update_tool_remove(self, tool_id: str, user: UserInfo) -> bool | dict[str, Any]:
+        try:
+            tool, container_id = await self._get_tool_and_container_id(tool_id)
+        except ValueError as exc:
+            return {"result": "0", "errorMessage": str(exc)}
+
+        await self.container_client.delete_container(container_id)
+        tool.status = "process"
+        tool.update_date = datetime.utcnow()
+        await self.db.commit()
+        return True
+
+    async def cancel_application(self, tool_id: str, payload: dict[str, Any], user: UserInfo) -> bool | dict[str, Any]:
+        tool = await self._get_tool_by_id(tool_id)
+        approval = await self.db.get(AnalysisToolApproval, tool.approval_id) if tool.approval_id else None
+        if approval is None:
+            return {"result": "0", "errorMessage": f"approval was not found in {tool_id}"}
+
+        request_status = str(payload.get("status") or "").strip().upper()
+        is_application_tool = self._is_tool_application(tool.status)
+        is_reapply_cancel = request_status == "REAPPLICATION"
+
+        if is_application_tool and is_reapply_cancel:
+            approval.type = "APPLICATION"
+            approval.status = "REJECT"
+            tool.update_date = datetime.utcnow()
+            await self.db.commit()
+            return True
+
+        await self.db.delete(approval)
+        if request_status == "APPLICATION":
+            await self.db.delete(tool)
+        else:
+            tool.approval_id = None
+            tool.update_date = datetime.utcnow()
+        await self.db.commit()
+        return True
+
+    def _is_past_expire(self, expire_date: date | None, is_limit: bool | None) -> bool:
+        if bool(is_limit):
+            return False
+        if expire_date is None:
+            return True
+        return expire_date < date.today()
+
+    async def _approve_common(self, tool_id: str) -> tuple[AnalysisTool, AnalysisToolApproval] | dict[str, Any]:
+        tool = await self._get_tool_by_id(tool_id)
+        approval = await self.db.get(AnalysisToolApproval, tool.approval_id) if tool.approval_id else None
+        if approval is None:
+            return {"result": "0", "errorMessage": f"approval was not found in {tool_id}"}
+        return tool, approval
+
+    async def approve_create(self, tool_id: str, approve: bool, user: UserInfo) -> bool | dict[str, Any]:
+        pair = await self._approve_common(tool_id)
+        if isinstance(pair, dict):
+            return pair
+        tool, approval = pair
+
+        validation_error = await self._validate_resources(
+            int(approval.cpu or 0),
+            int(approval.gpu or 0),
+            int(approval.mem or 0),
+            int(approval.capacity or 0),
+        )
+        if validation_error:
+            return {"result": "0", "errorMessage": validation_error}
+
+        if approve:
+            if self._is_past_expire(approval.expire_date, approval.is_limit):
+                return {"result": "0", "errorMessage": "expire date is past."}
+
+            tool.status = "process"
+            tool.cpu = approval.cpu
+            tool.gpu = approval.gpu
+            tool.mem = approval.mem
+            tool.capacity = approval.capacity
+            tool.expire_date = approval.expire_date
+            tool.is_limit = approval.is_limit
+            tool.update_date = datetime.utcnow()
+
+            result = await self.container_client.create_container(
+                image=str(tool.image_id or ""),
+                backup_id=tool.backup_id,
+                cpu=int(tool.cpu or 0),
+                gpu=int(tool.gpu or 0),
+                mem=int(tool.mem or 0),
+                capacity=int(tool.capacity or 0),
+                expire_date=tool.expire_date,
+                is_limit=bool(tool.is_limit),
+            )
+            data = result.get("data", result)
+            if isinstance(data, dict):
+                tool.container_id = str(data.get("id") or tool.container_id or "")
+
+            tool.approval_id = None
+            await self.db.delete(approval)
+            await self.db.commit()
+            return True
+
+        approval.status = "REJECT"
+        await self.db.commit()
+        return True
+
+    async def approve_resource(self, tool_id: str, approve: bool, user: UserInfo) -> bool | dict[str, Any]:
+        pair = await self._approve_common(tool_id)
+        if isinstance(pair, dict):
+            return pair
+        tool, approval = pair
+
+        validation_error = await self._validate_resources(
+            int(approval.cpu or 0),
+            int(approval.gpu or 0),
+            int(approval.mem or 0),
+            int(approval.capacity or 0),
+            excluded_id=tool_id,
+        )
+        if validation_error:
+            return {"result": "0", "errorMessage": validation_error}
+
+        if approve:
+            if self._is_past_expire(approval.expire_date, approval.is_limit):
+                return {"result": "0", "errorMessage": "expire date is past."}
+
+            tool.status = "process"
+            tool.cpu = approval.cpu
+            tool.gpu = approval.gpu
+            tool.mem = approval.mem
+            tool.capacity = approval.capacity
+            tool.expire_date = approval.expire_date
+            tool.is_limit = approval.is_limit
+            tool.update_date = datetime.utcnow()
+
+            container_id = str(tool.container_id or "").strip()
+            if container_id:
+                await self.container_client.restart_container(
+                    container_id=container_id,
+                    image=str(tool.image_id or ""),
+                    backup_id=tool.backup_id,
+                    cpu=int(tool.cpu or 0),
+                    gpu=int(tool.gpu or 0),
+                    mem=int(tool.mem or 0),
+                    capacity=int(tool.capacity or 0),
+                    expire_date=tool.expire_date,
+                    is_limit=bool(tool.is_limit),
+                )
+
+            tool.approval_id = None
+            await self.db.delete(approval)
+            await self.db.commit()
+            return True
+
+        approval.status = "REJECT"
+        await self.db.commit()
+        return True
+
+    async def approve_expire_date(self, tool_id: str, approve: bool, user: UserInfo) -> bool | dict[str, Any]:
+        pair = await self._approve_common(tool_id)
+        if isinstance(pair, dict):
+            return pair
+        tool, approval = pair
+
+        if approve:
+            if self._is_past_expire(approval.expire_date, approval.is_limit):
+                return {"result": "0", "errorMessage": "expire date is past."}
+
+            tool.expire_date = approval.expire_date
+            tool.is_limit = approval.is_limit
+            tool.update_date = datetime.utcnow()
+
+            container_id = str(tool.container_id or "").strip()
+            if container_id:
+                await self.container_client.change_info_container(
+                    container_id=container_id,
+                    expire_date=tool.expire_date,
+                    is_limit=bool(tool.is_limit),
+                )
+
+            tool.approval_id = None
+            await self.db.delete(approval)
+            await self.db.commit()
+            return True
+
+        approval.status = "REJECT"
         await self.db.commit()
         return True
 
@@ -538,13 +847,14 @@ class AnalysisToolService:
         }
 
     async def stop_tool(self, tool_id: str, user: UserInfo) -> dict[str, Any]:
-        # pgv2 는 tool.containerId 로 stop 호출한다. 현재 스키마 제약으로 tool_id 를 컨테이너 ID로 사용.
         tool = await self.db.get(AnalysisTool, tool_id)
-        container_id = str(tool.container_id) if tool and tool.container_id else str(tool_id)
+        container_id = str(tool.container_id or "") if tool else ""
+        if not container_id:
+            return {"result": "0", "errorMessage": "empty container id"}
         try:
             data = await self.container_client.stop_container(container_id)
             if tool is not None:
-                tool.status = "STOP"
+                tool.status = "process"
                 tool.update_date = datetime.utcnow()
                 await self.db.commit()
             return {"id": tool_id, "stopped": True, "container": data}
@@ -553,14 +863,16 @@ class AnalysisToolService:
 
     async def restart_tool(self, tool_id: str, user: UserInfo) -> dict[str, Any]:
         tool = await self.db.get(AnalysisTool, tool_id)
-        container_id = str(tool.container_id) if tool and tool.container_id else str(tool_id)
+        container_id = str(tool.container_id or "") if tool else ""
+        if not container_id:
+            return {"result": "0", "errorMessage": "empty container id"}
         try:
             data = await self.container_client.restart_container_with_params(
                 container_id=container_id,
                 params={},
             )
             if tool is not None:
-                tool.status = "PROCESS"
+                tool.status = "process"
                 tool.update_date = datetime.utcnow()
                 await self.db.commit()
             return {"id": tool_id, "restarted": True, "container": data}
@@ -572,7 +884,7 @@ class AnalysisToolService:
         if tool is None:
             return {"id": tool_id, "deleted": False}
 
-        self.db.delete(tool)
+        await self.db.delete(tool)
         await self.db.commit()
 
         container_id = str(tool.container_id) if tool.container_id else str(tool_id)
@@ -581,3 +893,132 @@ class AnalysisToolService:
         except Exception:
             pass
         return {"id": tool_id, "deleted": True}
+
+    async def get_tool_url(self, tool_id: str, user: UserInfo) -> str:
+        tool = await self.db.get(AnalysisTool, tool_id)
+        return str(tool.container_id) if tool and tool.container_id else ""
+
+    async def update_tool_status(self, payload: dict[str, Any]) -> bool | dict[str, Any]:
+        container_id = str(payload.get("containerId") or "")
+        status_raw = str(payload.get("status") or "")
+        normalized_status = status_raw.strip().lower()
+
+        valid_statuses = {
+            "application",
+            "process",
+            "running",
+            "stopped",
+            "expired",
+            "deleted",
+            "error",
+        }
+        if normalized_status not in valid_statuses:
+            return {"result": "0", "errorMessage": f"Invalid value - status: {status_raw}"}
+
+        stmt = select(AnalysisTool).where(AnalysisTool.container_id == container_id).limit(1)
+        tool = (await self.db.execute(stmt)).scalar_one_or_none()
+        if tool is None:
+            return {"result": "0", "errorMessage": f"Not found AnalysisTool by containerId: {container_id}"}
+
+        tool.status = normalized_status
+        tool.update_date = datetime.utcnow()
+
+        if normalized_status == "running" and tool.approval_id:
+            approval = await self.db.get(AnalysisToolApproval, tool.approval_id)
+            tool.approval_id = None
+            if approval is not None:
+                await self.db.delete(approval)
+        elif normalized_status == "deleted":
+            tool.container_id = None
+
+        await self.db.commit()
+        return True
+
+    async def update_access_date(self, tool_id: str, user: UserInfo) -> bool:
+        tool = await self._get_tool_by_id(tool_id)
+        tool.access_date = datetime.utcnow()
+        await self.db.commit()
+        return True
+
+    async def get_file_list_in_tool(self, tool_id: str, payload: dict[str, Any], user: UserInfo) -> dict[str, Any]:
+        _, container_id = await self._get_tool_and_container_id(tool_id)
+        dirpath = str(payload.get("path") or "")
+        depth = self._to_int(payload.get("depth"), 0)
+        type_ = str(payload.get("type") or "all")
+        result = await self.container_client.get_explorer(
+            container_id=container_id,
+            dirpath=dirpath,
+            depth=depth,
+            type_=type_,
+        )
+        return result.get("data", result)
+
+    async def import_file_to_tool(self, tool_id: str, payload: dict[str, Any], user: UserInfo) -> dict[str, Any]:
+        _, container_id = await self._get_tool_and_container_id(tool_id)
+        files_in_body = payload.get("files")
+        if not isinstance(files_in_body, list):
+            return {"result": "0", "errorMessage": "missing params: files"}
+
+        flattened = self._extract_files_from_tree(files_in_body)
+        if not flattened:
+            return {"result": "0", "errorMessage": "missing params: files"}
+
+        for file_item in flattened:
+            filenode_id = file_item.get("filenodeId")
+            if filenode_id is None or str(filenode_id).strip() == "":
+                return {"result": "0", "errorMessage": "missing filenodeId in files."}
+
+        for file_item in flattened:
+            filenode_id = int(str(file_item.get("filenodeId")))
+            node = await self.db.get(FileNode, filenode_id)
+            file_object_id = node.file_object_id if node else None
+            if not file_object_id:
+                return {"result": "0", "errorMessage": "Not found FileNode or missing fileId in files."}
+            file_item.pop("filenodeId", None)
+            file_item["fileId"] = file_object_id
+
+        result = await self.container_client.import_data(
+            container_id=container_id,
+            dirpath=str(payload.get("path") or ""),
+            files=files_in_body,
+        )
+        return result.get("data", result)
+
+    async def export_file_from_tool(self, tool_id: str, payload: dict[str, Any], user: UserInfo) -> bool | dict[str, Any]:
+        _, container_id = await self._get_tool_and_container_id(tool_id)
+        files_in_body = payload.get("files")
+        if not isinstance(files_in_body, list):
+            return {"result": "0", "errorMessage": "missing params: files"}
+
+        result = await self.container_client.export_data(
+            container_id=container_id,
+            dirpath=str(payload.get("path") or ""),
+            files=files_in_body,
+        )
+        data = result.get("data", result)
+        response_files = self._extract_files_from_tree(data.get("files", []) if isinstance(data, dict) else [])
+        request_files = self._extract_files_from_tree(files_in_body)
+
+        for rfile in response_files:
+            if not str(rfile.get("fileId") or "").strip():
+                return {"result": "0", "errorMessage": "missing fileId in files. (from CMS)"}
+
+        response_file_map = {str(f.get("name") or ""): str(f.get("fileId") or "") for f in response_files}
+        for req_file in request_files:
+            src_name = str(req_file.get("name") or "")
+            file_id = response_file_map.get(src_name)
+            if not file_id:
+                continue
+            name_to_change = str(req_file.get("nameToChange") or "").strip()
+            file_name = name_to_change if name_to_change else src_name
+            node = FileNode(
+                file_object_id=file_id,
+                file_stts_ready=True,
+                name=file_name,
+                owner_id=user.id,
+                create_date=datetime.utcnow(),
+            )
+            self.db.add(node)
+
+        await self.db.commit()
+        return True
